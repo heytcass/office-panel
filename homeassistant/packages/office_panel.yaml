@@ -129,6 +129,20 @@ template:
         state: "{{ now().strftime('%A, %B %-d') }}"
 
 # ──────────────────────────────────────────────────────────────────────
+# Input helpers
+# ──────────────────────────────────────────────────────────────────────
+
+input_number:
+  office_booking_custom_minutes:
+    name: Office Booking Custom Duration
+    min: 15
+    max: 240
+    step: 15
+    unit_of_measurement: min
+    initial: 45
+    icon: mdi:clock-edit
+
+# ──────────────────────────────────────────────────────────────────────
 # Scripts — booking actions
 # ──────────────────────────────────────────────────────────────────────
 # SPEC §4 constraints enforced here:
@@ -301,6 +315,31 @@ script:
           summary: "{{ summary }}"
           start_date_time: "{{ orig_start }}"
           end_date_time: "{{ new_end }}"
+
+  book_office_custom:
+    alias: Book Office (Custom Duration)
+    description: >-
+      Book using the duration selected in
+      input_number.office_booking_custom_minutes. Thin wrapper around
+      script.book_office so the dashboard button doesn't need a
+      templated service-data block (which Lovelace button cards don't
+      support).
+    mode: queued
+    max: 2
+    fields:
+      owner:
+        description: Display name for the booking.
+        example: "Tom"
+        default: "Tom"
+        selector:
+          text:
+    sequence:
+      - service: script.book_office
+        data:
+          duration_minutes: >-
+            {{ states('input_number.office_booking_custom_minutes') | int }}
+          owner: "{{ owner }}"
+          source: "phone"
 
   extend_office_booking:
     alias: Extend Office Booking

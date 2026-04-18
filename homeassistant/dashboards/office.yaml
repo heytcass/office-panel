@@ -1,0 +1,135 @@
+# office_panel — Lovelace dashboard
+#
+# Register this file in Home Assistant's lovelace config so it shows up
+# as a secondary dashboard (main HA dashboard stays storage/UI-managed).
+#
+# In configuration.yaml (outside any package):
+#
+#   lovelace:
+#     mode: storage
+#     dashboards:
+#       office:
+#         mode: yaml
+#         title: Office
+#         icon: mdi:door
+#         show_in_sidebar: true
+#         filename: dashboards/office.yaml
+#
+# Then symlink or copy this file into your HA config dir:
+#   ln -s <repo>/homeassistant/dashboards/office.yaml <ha_config>/dashboards/office.yaml
+#
+# Phase 1 scope: glanceable status, manual booking, calendar edit, panel
+# diagnostics. Phase 2 adds the physical-button mirroring buttons (same
+# actions, same card).
+
+title: Office
+views:
+  - title: Office
+    path: office
+    icon: mdi:door
+
+    cards:
+      # Status at a glance — mode sensor uses icon + color-per-state.
+      - type: entity
+        entity: sensor.office_mode
+        name: Status
+        state_color: true
+        icon_color: >-
+          {% set m = states('sensor.office_mode') %}
+          {% if m == 'BOOKED' %}red
+          {% elif m == 'STARTING_SOON' %}amber
+          {% elif m in ('AVAILABLE', 'WEEKEND') %}green
+          {% else %}grey{% endif %}
+
+      - type: entities
+        title: Current and next
+        show_header_toggle: false
+        entities:
+          - entity: sensor.office_current_booking_owner
+            name: Current owner
+          - entity: sensor.office_current_booking_ends
+            name: Ends
+          - entity: sensor.office_next_booking_owner
+            name: Next owner
+          - entity: sensor.office_next_booking_starts
+            name: Next start
+
+      # Quick-book grid — mirrors the planned physical button layout so
+      # the muscle memory carries over when Phase 2 lands. "End booking"
+      # is on the green/long-press button on the hardware; on-screen it's
+      # a plain button since no long-press distinction is needed.
+      - type: grid
+        columns: 2
+        square: false
+        cards:
+          - type: button
+            name: Book 30 min
+            icon: mdi:clock-fast
+            tap_action:
+              action: call-service
+              service: script.book_office
+              service_data:
+                duration_minutes: 30
+                owner: Tom
+                source: phone
+          - type: button
+            name: Book 1 hour
+            icon: mdi:clock
+            tap_action:
+              action: call-service
+              service: script.book_office
+              service_data:
+                duration_minutes: 60
+                owner: Tom
+                source: phone
+          - type: button
+            name: Until next event
+            icon: mdi:arrow-right-bold
+            tap_action:
+              action: call-service
+              service: script.book_office_until_next
+              service_data:
+                owner: Tom
+                source: phone
+          - type: button
+            name: End booking
+            icon: mdi:close-circle
+            tap_action:
+              action: call-service
+              service: script.end_office_booking
+
+      # Custom-duration picker — adjust the slider, then tap Book custom.
+      - type: entities
+        title: Custom duration
+        show_header_toggle: false
+        entities:
+          - entity: input_number.office_booking_custom_minutes
+            name: Minutes
+      - type: button
+        name: Book custom
+        icon: mdi:clock-edit-outline
+        tap_action:
+          action: call-service
+          service: script.book_office_custom
+          service_data:
+            owner: Tom
+
+      # Calendar — create / edit / delete events directly. Phase 1's
+      # "reflect on panel within one wake cycle" DoD is verified here.
+      - type: calendar
+        title: Office calendar
+        initial_view: listWeek
+        entities:
+          - calendar.office
+
+      # Panel diagnostics — battery + last refresh give quick signal on
+      # whether the hardware is healthy. Link to ESPHome device page
+      # appears in Settings → Devices once the panel is adopted.
+      - type: entities
+        title: Panel hardware
+        show_header_toggle: false
+        entities:
+          - entity: sensor.office_panel_battery
+            name: Battery
+          - entity: sensor.office_panel_last_refresh
+            name: Last refresh
