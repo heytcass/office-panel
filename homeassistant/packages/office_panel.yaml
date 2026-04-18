@@ -34,60 +34,45 @@ template:
         entity_id: calendar.office
       - platform: time_pattern
         minutes: "/1"
+    # All state: expressions use inline `{{ }}` (not multi-line if/elif)
+    # so that YAML block-folding doesn't leak surrounding whitespace into
+    # the rendered state value. A state like "   BOOKED   " would break
+    # string comparisons on the firmware side.
     sensor:
       - name: "Office Mode"
         unique_id: office_mode
         state: >-
-          {% set cal = states('calendar.office') %}
-          {% set now_dt = now() %}
-          {% set is_weekend = now_dt.isoweekday() >= 6 %}
-          {% set is_overnight = now_dt.hour >= 22 or now_dt.hour < 7 %}
-          {% if cal == 'on' %}
-            BOOKED
-          {% elif is_overnight %}
-            OVERNIGHT
-          {% elif is_weekend %}
-            WEEKEND
-          {% else %}
-            {% set start = state_attr('calendar.office', 'start_time') %}
-            {% if start %}
-              {% set delta = (as_datetime(start) - now_dt).total_seconds() %}
-              {% if delta > 0 and delta <= 900 %}
-                STARTING_SOON
-              {% else %}
-                AVAILABLE
-              {% endif %}
-            {% else %}
-              AVAILABLE
-            {% endif %}
-          {% endif %}
+          {%- set cal = states('calendar.office') -%}
+          {%- set now_dt = now() -%}
+          {%- set is_weekend = now_dt.isoweekday() >= 6 -%}
+          {%- set is_overnight = now_dt.hour >= 22 or now_dt.hour < 7 -%}
+          {%- set start = state_attr('calendar.office', 'start_time') -%}
+          {%- set delta = ((as_datetime(start) - now_dt).total_seconds() if start else 0) -%}
+          {%- set is_soon = (delta > 0 and delta <= 900) -%}
+          {{- 'BOOKED' if cal == 'on'
+              else ('OVERNIGHT' if is_overnight
+              else ('WEEKEND' if is_weekend
+              else ('STARTING_SOON' if is_soon else 'AVAILABLE'))) -}}
         icon: >-
-          {% set mode = this.state %}
-          {% if mode == 'BOOKED' %}mdi:door-closed-lock
-          {% elif mode == 'STARTING_SOON' %}mdi:clock-alert
-          {% elif mode == 'WEEKEND' %}mdi:calendar-weekend
-          {% elif mode == 'OVERNIGHT' %}mdi:weather-night
-          {% else %}mdi:door-open
-          {% endif %}
+          {%- set m = this.state -%}
+          {{- 'mdi:door-closed-lock' if m == 'BOOKED'
+              else ('mdi:clock-alert' if m == 'STARTING_SOON'
+              else ('mdi:calendar-weekend' if m == 'WEEKEND'
+              else ('mdi:weather-night' if m == 'OVERNIGHT'
+              else 'mdi:door-open'))) -}}
 
       - name: "Office Current Booking Owner"
         unique_id: office_current_booking_owner
         state: >-
-          {% if states('calendar.office') == 'on' %}
-            {{ state_attr('calendar.office', 'message') or 'Unknown' }}
-          {% else %}
-            unknown
-          {% endif %}
+          {{- (state_attr('calendar.office', 'message') or 'Unknown')
+              if states('calendar.office') == 'on' else 'unknown' -}}
 
       - name: "Office Current Booking Ends"
         unique_id: office_current_booking_ends
         device_class: timestamp
         state: >-
-          {% if states('calendar.office') == 'on' %}
-            {{ state_attr('calendar.office', 'end_time') }}
-          {% else %}
-            {{ None }}
-          {% endif %}
+          {%- set e = state_attr('calendar.office', 'end_time') -%}
+          {{- e if (states('calendar.office') == 'on' and e) else None -}}
 
       # "Next" reflects the next upcoming event only when the calendar is
       # NOT currently active. Querying the next event during an active
@@ -95,21 +80,15 @@ template:
       - name: "Office Next Booking Owner"
         unique_id: office_next_booking_owner
         state: >-
-          {% if states('calendar.office') == 'off' %}
-            {{ state_attr('calendar.office', 'message') or 'unknown' }}
-          {% else %}
-            unknown
-          {% endif %}
+          {{- (state_attr('calendar.office', 'message') or 'unknown')
+              if states('calendar.office') == 'off' else 'unknown' -}}
 
       - name: "Office Next Booking Starts"
         unique_id: office_next_booking_starts
         device_class: timestamp
         state: >-
-          {% if states('calendar.office') == 'off' %}
-            {{ state_attr('calendar.office', 'start_time') }}
-          {% else %}
-            {{ None }}
-          {% endif %}
+          {%- set s = state_attr('calendar.office', 'start_time') -%}
+          {{- s if (states('calendar.office') == 'off' and s) else None -}}
 
       # Display-friendly derivations: pre-formatted in HA so the ESPHome
       # lambda can render strings directly without parsing ISO8601 or
@@ -117,53 +96,32 @@ template:
       - name: "Office Current End HHMM"
         unique_id: office_current_end_hhmm
         state: >-
-          {% if states('calendar.office') == 'on' %}
-            {% set e = state_attr('calendar.office', 'end_time') %}
-            {{ as_datetime(e).strftime('%H:%M') if e else 'unknown' }}
-          {% else %}
-            unknown
-          {% endif %}
+          {%- set e = state_attr('calendar.office', 'end_time') -%}
+          {{- as_datetime(e).strftime('%H:%M')
+              if (states('calendar.office') == 'on' and e) else 'unknown' -}}
 
       - name: "Office Next Start HHMM"
         unique_id: office_next_start_hhmm
         state: >-
-          {% if states('calendar.office') == 'off' %}
-            {% set s = state_attr('calendar.office', 'start_time') %}
-            {{ as_datetime(s).strftime('%H:%M') if s else 'unknown' }}
-          {% else %}
-            unknown
-          {% endif %}
+          {%- set s = state_attr('calendar.office', 'start_time') -%}
+          {{- as_datetime(s).strftime('%H:%M')
+              if (states('calendar.office') == 'off' and s) else 'unknown' -}}
 
       - name: "Office Starting Soon Minutes"
         unique_id: office_starting_soon_minutes
         unit_of_measurement: "min"
         state: >-
-          {% if states('calendar.office') == 'off' %}
-            {% set s = state_attr('calendar.office', 'start_time') %}
-            {% if s %}
-              {% set d = (as_datetime(s) - now()).total_seconds() / 60 %}
-              {{ (d | round(0, 'ceil') | int) if d > 0 else 0 }}
-            {% else %}
-              0
-            {% endif %}
-          {% else %}
-            0
-          {% endif %}
+          {%- set s = state_attr('calendar.office', 'start_time') -%}
+          {%- set d = ((as_datetime(s) - now()).total_seconds() / 60) if s else 0 -%}
+          {{- ((d | round(0, 'ceil')) | int)
+              if (states('calendar.office') == 'off' and d > 0) else 0 -}}
 
       - name: "Office Next Within 60 Minutes"
         unique_id: office_next_within_60_minutes
         state: >-
-          {% if states('calendar.office') == 'off' %}
-            {% set s = state_attr('calendar.office', 'start_time') %}
-            {% if s %}
-              {% set d = (as_datetime(s) - now()).total_seconds() / 60 %}
-              {{ 'true' if (d > 0 and d <= 60) else 'false' }}
-            {% else %}
-              false
-            {% endif %}
-          {% else %}
-            false
-          {% endif %}
+          {%- set s = state_attr('calendar.office', 'start_time') -%}
+          {%- set d = ((as_datetime(s) - now()).total_seconds() / 60) if s else 0 -%}
+          {{- 'true' if (states('calendar.office') == 'off' and d > 0 and d <= 60) else 'false' -}}
 
       # Day-of-week display for WEEKEND mode: "Saturday, April 18"
       - name: "Office Weekend Day Label"
