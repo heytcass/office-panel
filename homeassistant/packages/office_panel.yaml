@@ -111,6 +111,65 @@ template:
             {{ None }}
           {% endif %}
 
+      # Display-friendly derivations: pre-formatted in HA so the ESPHome
+      # lambda can render strings directly without parsing ISO8601 or
+      # doing time math in C++.
+      - name: "Office Current End HHMM"
+        unique_id: office_current_end_hhmm
+        state: >-
+          {% if states('calendar.office') == 'on' %}
+            {% set e = state_attr('calendar.office', 'end_time') %}
+            {{ as_datetime(e).strftime('%H:%M') if e else 'unknown' }}
+          {% else %}
+            unknown
+          {% endif %}
+
+      - name: "Office Next Start HHMM"
+        unique_id: office_next_start_hhmm
+        state: >-
+          {% if states('calendar.office') == 'off' %}
+            {% set s = state_attr('calendar.office', 'start_time') %}
+            {{ as_datetime(s).strftime('%H:%M') if s else 'unknown' }}
+          {% else %}
+            unknown
+          {% endif %}
+
+      - name: "Office Starting Soon Minutes"
+        unique_id: office_starting_soon_minutes
+        unit_of_measurement: "min"
+        state: >-
+          {% if states('calendar.office') == 'off' %}
+            {% set s = state_attr('calendar.office', 'start_time') %}
+            {% if s %}
+              {% set d = (as_datetime(s) - now()).total_seconds() / 60 %}
+              {{ (d | round(0, 'ceil') | int) if d > 0 else 0 }}
+            {% else %}
+              0
+            {% endif %}
+          {% else %}
+            0
+          {% endif %}
+
+      - name: "Office Next Within 60 Minutes"
+        unique_id: office_next_within_60_minutes
+        state: >-
+          {% if states('calendar.office') == 'off' %}
+            {% set s = state_attr('calendar.office', 'start_time') %}
+            {% if s %}
+              {% set d = (as_datetime(s) - now()).total_seconds() / 60 %}
+              {{ 'true' if (d > 0 and d <= 60) else 'false' }}
+            {% else %}
+              false
+            {% endif %}
+          {% else %}
+            false
+          {% endif %}
+
+      # Day-of-week display for WEEKEND mode: "Saturday, April 18"
+      - name: "Office Weekend Day Label"
+        unique_id: office_weekend_day_label
+        state: "{{ now().strftime('%A, %B %-d') }}"
+
 # ──────────────────────────────────────────────────────────────────────
 # Scripts — booking actions
 # ──────────────────────────────────────────────────────────────────────
