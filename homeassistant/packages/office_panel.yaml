@@ -1,0 +1,404 @@
+# office_panel — Home Assistant package
+#
+# Loaded via `packages: !include_dir_named packages` in configuration.yaml.
+# Entity / script / automation naming follows CLAUDE.md:
+#   - Calendar: calendar.office
+#   - Room state: sensor.office_*
+#   - Panel hardware: sensor.office_panel_*
+#   - Scripts: script.<verb>_office[_<noun>]
+#
+# Prerequisites (manual setup in HA UI before this package is useful):
+#   1. Settings → Devices & Services → Add Integration → Local Calendar
+#      Name: "Office". This creates calendar.office.
+#   2. Flash the panel firmware (esphome/office_panel.yaml). It publishes
+#      sensor.office_panel_battery and sensor.office_panel_last_refresh
+#      which the notification automations below depend on.
+#
+# Phase 1 scope (SPEC §12):
+#   - Template sensors driving the five display modes
+#   - Scripts for dashboard-triggered bookings
+#   - Low-battery + stale-refresh notifications
+# Phase 2 adds button-event automations; Phase 3 adds voice intents.
+
+# ──────────────────────────────────────────────────────────────────────
+# Template sensors — room state derived from calendar.office + clock
+# ──────────────────────────────────────────────────────────────────────
+
+template:
+  # Trigger-based so mode updates the instant calendar state changes AND
+  # every minute so STARTING_SOON / OVERNIGHT / WEEKEND transitions don't
+  # wait on a calendar event. The panel itself pulls at wake time; this
+  # sensor just needs to be fresh when asked.
+  - trigger:
+      - platform: state
+        entity_id: calendar.office
+      - platform: time_pattern
+        minutes: "/1"
+    sensor:
+      - name: "Office Mode"
+        unique_id: office_mode
+        state: >-
+          {% set cal = states('calendar.office') %}
+          {% set now_dt = now() %}
+          {% set is_weekend = now_dt.isoweekday() >= 6 %}
+          {% set is_overnight = now_dt.hour >= 22 or now_dt.hour < 7 %}
+          {% if cal == 'on' %}
+            BOOKED
+          {% elif is_overnight %}
+            OVERNIGHT
+          {% elif is_weekend %}
+            WEEKEND
+          {% else %}
+            {% set start = state_attr('calendar.office', 'start_time') %}
+            {% if start %}
+              {% set delta = (as_datetime(start) - now_dt).total_seconds() %}
+              {% if delta > 0 and delta <= 900 %}
+                STARTING_SOON
+              {% else %}
+                AVAILABLE
+              {% endif %}
+            {% else %}
+              AVAILABLE
+            {% endif %}
+          {% endif %}
+        icon: >-
+          {% set mode = this.state %}
+          {% if mode == 'BOOKED' %}mdi:door-closed-lock
+          {% elif mode == 'STARTING_SOON' %}mdi:clock-alert
+          {% elif mode == 'WEEKEND' %}mdi:calendar-weekend
+          {% elif mode == 'OVERNIGHT' %}mdi:weather-night
+          {% else %}mdi:door-open
+          {% endif %}
+
+      - name: "Office Current Booking Owner"
+        unique_id: office_current_booking_owner
+        state: >-
+          {% if states('calendar.office') == 'on' %}
+            {{ state_attr('calendar.office', 'message') or 'Unknown' }}
+          {% else %}
+            unknown
+          {% endif %}
+
+      - name: "Office Current Booking Ends"
+        unique_id: office_current_booking_ends
+        device_class: timestamp
+        state: >-
+          {% if states('calendar.office') == 'on' %}
+            {{ state_attr('calendar.office', 'end_time') }}
+          {% else %}
+            {{ None }}
+          {% endif %}
+
+      # "Next" reflects the next upcoming event only when the calendar is
+      # NOT currently active. Querying the next event during an active
+      # booking requires calendar.get_events (async); deferred to Phase 2+.
+      - name: "Office Next Booking Owner"
+        unique_id: office_next_booking_owner
+        state: >-
+          {% if states('calendar.office') == 'off' %}
+            {{ state_attr('calendar.office', 'message') or 'unknown' }}
+          {% else %}
+            unknown
+          {% endif %}
+
+      - name: "Office Next Booking Starts"
+        unique_id: office_next_booking_starts
+        device_class: timestamp
+        state: >-
+          {% if states('calendar.office') == 'off' %}
+            {{ state_attr('calendar.office', 'start_time') }}
+          {% else %}
+            {{ None }}
+          {% endif %}
+
+# ──────────────────────────────────────────────────────────────────────
+# Scripts — booking actions
+# ──────────────────────────────────────────────────────────────────────
+# SPEC §4 constraints enforced here:
+#   - start rounded DOWN to 15-min; end rounded UP if needed to keep
+#     requested duration intact
+#   - min 15 min, max 4 hours
+#   - overlap check before create; stop with error on conflict
+
+script:
+  book_office:
+    alias: Book Office
+    description: >-
+      Create a booking on calendar.office starting now (rounded to the
+      previous 15-min boundary). Fails with error if the window overlaps
+      an existing event.
+    mode: queued
+    max: 4
+    fields:
+      duration_minutes:
+        description: Length of booking in minutes (15–240).
+        example: 30
+        selector:
+          number:
+            min: 15
+            max: 240
+            step: 15
+      owner:
+        description: Display name for the booking (summary field).
+        example: "Tom"
+        selector:
+          text:
+      source:
+        description: Input source for metadata ("phone", "button", "voice").
+        example: "phone"
+        default: "phone"
+        selector:
+          text:
+    sequence:
+      - variables:
+          duration_clamped: >-
+            {{ [15, [duration_minutes | int, 240] | min] | max }}
+          start_dt: >-
+            {{ now().replace(second=0, microsecond=0)
+               - timedelta(minutes=(now().minute % 15)) }}
+          end_mod: "{{ duration_clamped % 15 }}"
+          duration_rounded: >-
+            {{ duration_clamped if end_mod | int == 0
+               else duration_clamped + (15 - (end_mod | int)) }}
+          end_dt: >-
+            {{ start_dt + timedelta(minutes=duration_rounded | int) }}
+      - service: calendar.get_events
+        target:
+          entity_id: calendar.office
+        data:
+          start_date_time: "{{ start_dt }}"
+          end_date_time: "{{ end_dt }}"
+        response_variable: events_response
+      - if:
+          - condition: template
+            value_template: >-
+              {{ (events_response['calendar.office']['events'] | default([])) | length > 0 }}
+        then:
+          - stop: "Conflict: overlapping event exists"
+            error: true
+      - service: calendar.create_event
+        target:
+          entity_id: calendar.office
+        data:
+          summary: "{{ owner }}"
+          description: >-
+            {{ {'source': source, 'created_at': now().isoformat()} | tojson }}
+          start_date_time: "{{ start_dt }}"
+          end_date_time: "{{ end_dt }}"
+
+  book_office_until_next:
+    alias: Book Office Until Next Event
+    description: >-
+      Book from now until the next scheduled event, or 2 hours if no
+      event is scheduled within the next 4 hours. Fails on conflict.
+    mode: queued
+    max: 4
+    fields:
+      owner:
+        description: Display name for the booking.
+        example: "Occupant"
+        selector:
+          text:
+      source:
+        description: Input source for metadata.
+        example: "button"
+        default: "button"
+        selector:
+          text:
+    sequence:
+      - variables:
+          start_dt: >-
+            {{ now().replace(second=0, microsecond=0)
+               - timedelta(minutes=(now().minute % 15)) }}
+          lookahead_end: "{{ start_dt + timedelta(hours=4) }}"
+      - service: calendar.get_events
+        target:
+          entity_id: calendar.office
+        data:
+          start_date_time: "{{ start_dt }}"
+          end_date_time: "{{ lookahead_end }}"
+        response_variable: events_response
+      - variables:
+          upcoming: >-
+            {{ events_response['calendar.office']['events'] | default([]) }}
+          end_dt: >-
+            {% if upcoming | length == 0 %}
+              {{ start_dt + timedelta(hours=2) }}
+            {% else %}
+              {{ as_datetime(upcoming[0]['start']) }}
+            {% endif %}
+      # A zero-length window would be a conflict on the exact-boundary
+      # start of the next event — reject rather than create an empty slot.
+      - if:
+          - condition: template
+            value_template: "{{ end_dt <= start_dt }}"
+        then:
+          - stop: "Conflict: next event starts now"
+            error: true
+      - service: calendar.create_event
+        target:
+          entity_id: calendar.office
+        data:
+          summary: "{{ owner }}"
+          description: >-
+            {{ {'source': source, 'created_at': now().isoformat()} | tojson }}
+          start_date_time: "{{ start_dt }}"
+          end_date_time: "{{ end_dt }}"
+
+  end_office_booking:
+    alias: End Office Booking
+    description: >-
+      End the active booking now. Sets end_time to the current clock
+      rounded DOWN to 15 min, or start_time + 15 min if that would be
+      before the booking's own start. No-op if no booking is active.
+    mode: single
+    sequence:
+      - if:
+          - condition: template
+            value_template: "{{ states('calendar.office') != 'on' }}"
+        then:
+          - stop: "No active booking"
+      - variables:
+          start_dt: "{{ as_datetime(state_attr('calendar.office', 'start_time')) }}"
+          now_aligned: >-
+            {{ now().replace(second=0, microsecond=0)
+               - timedelta(minutes=(now().minute % 15)) }}
+          min_end: "{{ start_dt + timedelta(minutes=15) }}"
+          new_end: >-
+            {{ min_end if now_aligned < min_end else now_aligned }}
+          summary: "{{ state_attr('calendar.office', 'message') }}"
+          orig_start: "{{ state_attr('calendar.office', 'start_time') }}"
+          orig_end: "{{ state_attr('calendar.office', 'end_time') }}"
+      # HA's calendar.edit_event service is not available for Local
+      # Calendar in all versions; the reliable approach is delete + create.
+      - service: calendar.delete_event
+        target:
+          entity_id: calendar.office
+        data:
+          event:
+            uid: "{{ state_attr('calendar.office', 'uid') }}"
+      - service: calendar.create_event
+        target:
+          entity_id: calendar.office
+        data:
+          summary: "{{ summary }}"
+          start_date_time: "{{ orig_start }}"
+          end_date_time: "{{ new_end }}"
+
+  extend_office_booking:
+    alias: Extend Office Booking
+    description: >-
+      Extend the active booking by N minutes (default 15). Fails on
+      overlap with a subsequent event; no-op if no active booking.
+    mode: single
+    fields:
+      duration_minutes:
+        description: How many minutes to extend (15–240).
+        example: 15
+        default: 15
+        selector:
+          number:
+            min: 15
+            max: 240
+            step: 15
+    sequence:
+      - if:
+          - condition: template
+            value_template: "{{ states('calendar.office') != 'on' }}"
+        then:
+          - stop: "No active booking to extend"
+            error: true
+      - variables:
+          current_end: "{{ as_datetime(state_attr('calendar.office', 'end_time')) }}"
+          new_end: "{{ current_end + timedelta(minutes=(duration_minutes | int)) }}"
+          check_start: "{{ current_end + timedelta(seconds=1) }}"
+      - service: calendar.get_events
+        target:
+          entity_id: calendar.office
+        data:
+          start_date_time: "{{ check_start }}"
+          end_date_time: "{{ new_end }}"
+        response_variable: events_response
+      - if:
+          - condition: template
+            value_template: >-
+              {{ (events_response['calendar.office']['events'] | default([])) | length > 0 }}
+        then:
+          - stop: "Conflict: subsequent booking would overlap"
+            error: true
+      - variables:
+          summary: "{{ state_attr('calendar.office', 'message') }}"
+          orig_start: "{{ state_attr('calendar.office', 'start_time') }}"
+      - service: calendar.delete_event
+        target:
+          entity_id: calendar.office
+        data:
+          event:
+            uid: "{{ state_attr('calendar.office', 'uid') }}"
+      - service: calendar.create_event
+        target:
+          entity_id: calendar.office
+        data:
+          summary: "{{ summary }}"
+          start_date_time: "{{ orig_start }}"
+          end_date_time: "{{ new_end }}"
+
+# ──────────────────────────────────────────────────────────────────────
+# Automations — notifications only in Phase 1
+# Button-event automations land in Phase 2; voice intents in Phase 3.
+# ──────────────────────────────────────────────────────────────────────
+
+automation:
+  - alias: Office Panel Low Battery
+    id: office_panel_low_battery
+    description: Notify when panel battery drops below 20%.
+    mode: single
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.office_panel_battery
+        below: 20
+        for:
+          minutes: 5
+    # Stale trigger would re-fire on HA restart without this; 24-hour
+    # throttle via last_triggered keeps alerts infrequent.
+    condition:
+      - condition: template
+        value_template: >-
+          {{ (now() - this.attributes.last_triggered | default(now() - timedelta(days=2))).total_seconds() > 86400 }}
+    action:
+      - service: notify.notify
+        data:
+          title: "Office Panel: low battery"
+          message: >-
+            Battery at {{ states('sensor.office_panel_battery') }}%. Charge the
+            reTerminal E1002 via USB-C when convenient.
+
+  - alias: Office Panel Stale
+    id: office_panel_stale
+    description: >-
+      Notify Tom when the panel hasn't refreshed in >2 hours during
+      active hours (07:00–22:00). Throttled to once per 6 hours.
+    mode: single
+    trigger:
+      - platform: time_pattern
+        minutes: "/15"
+    condition:
+      - condition: time
+        after: "07:00:00"
+        before: "22:00:00"
+      - condition: template
+        value_template: >-
+          {% set last = states('sensor.office_panel_last_refresh') %}
+          {{ last not in ['unknown', 'unavailable', None]
+             and (now() - as_datetime(last)).total_seconds() > 7200 }}
+      - condition: template
+        value_template: >-
+          {{ (now() - this.attributes.last_triggered | default(now() - timedelta(hours=12))).total_seconds() > 21600 }}
+    action:
+      - service: notify.notify
+        data:
+          title: "Office Panel: stale"
+          message: >-
+            Last refresh was
+            {{ relative_time(as_datetime(states('sensor.office_panel_last_refresh'))) }}
+            ago. Check if the device is asleep, out of Wi-Fi range, or dead.
