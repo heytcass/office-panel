@@ -70,9 +70,14 @@ template:
       - name: "Office Current Booking Ends"
         unique_id: office_current_booking_ends
         device_class: timestamp
+        # Emit the timestamp only while a booking is active; marked
+        # unavailable otherwise so HA renders "unavailable" rather than
+        # trying to parse the string "None" as a timestamp.
+        availability: >-
+          {{- states('calendar.office') == 'on'
+              and state_attr('calendar.office', 'end_time') is not none -}}
         state: >-
-          {%- set e = state_attr('calendar.office', 'end_time') -%}
-          {{- e if (states('calendar.office') == 'on' and e) else None -}}
+          {{- state_attr('calendar.office', 'end_time') -}}
 
       # "Next" reflects the next upcoming event only when the calendar is
       # NOT currently active. Querying the next event during an active
@@ -86,9 +91,11 @@ template:
       - name: "Office Next Booking Starts"
         unique_id: office_next_booking_starts
         device_class: timestamp
+        availability: >-
+          {{- states('calendar.office') == 'off'
+              and state_attr('calendar.office', 'start_time') is not none -}}
         state: >-
-          {%- set s = state_attr('calendar.office', 'start_time') -%}
-          {{- s if (states('calendar.office') == 'off' and s) else None -}}
+          {{- state_attr('calendar.office', 'start_time') -}}
 
       # Display-friendly derivations: pre-formatted in HA so the ESPHome
       # lambda can render strings directly without parsing ISO8601 or
@@ -289,31 +296,60 @@ script:
             value_template: "{{ states('calendar.office') != 'on' }}"
         then:
           - stop: "No active booking"
+      # Local Calendar doesn't expose event uid through state_attr(),
+      # so we have to query calendar.get_events to identify which event
+      # to delete. A tight window around now() returns just the active
+      # event (and possibly one that starts/ends right at now()).
+      - service: calendar.get_events
+        target:
+          entity_id: calendar.office
+        data:
+          start_date_time: "{{ (now() - timedelta(seconds=30)).isoformat() }}"
+          end_date_time: "{{ (now() + timedelta(seconds=30)).isoformat() }}"
+        response_variable: events_response
       - variables:
-          start_dt: "{{ as_datetime(state_attr('calendar.office', 'start_time')) }}"
+          candidate_events: >-
+            {{ events_response['calendar.office']['events'] | default([]) }}
+          active: >-
+            {%- set ns = namespace(ev=None) -%}
+            {%- for e in candidate_events -%}
+              {%- if as_datetime(e.start) <= now()
+                     and as_datetime(e.end) > now()
+                     and ns.ev is none -%}
+                {%- set ns.ev = e -%}
+              {%- endif -%}
+            {%- endfor -%}
+            {{ ns.ev }}
+      - if:
+          - condition: template
+            value_template: "{{ active in ('None', None, '') }}"
+        then:
+          - stop: "Active event not found in calendar query"
+            error: true
+      - variables:
+          start_dt: "{{ as_datetime(active.start) }}"
           now_aligned: >-
             {{ now().replace(second=0, microsecond=0)
                - timedelta(minutes=(now().minute % 15)) }}
           min_end: "{{ start_dt + timedelta(minutes=15) }}"
           new_end: >-
             {{ min_end if now_aligned < min_end else now_aligned }}
-          summary: "{{ state_attr('calendar.office', 'message') }}"
-          orig_start: "{{ state_attr('calendar.office', 'start_time') }}"
-          orig_end: "{{ state_attr('calendar.office', 'end_time') }}"
-      # HA's calendar.edit_event service is not available for Local
-      # Calendar in all versions; the reliable approach is delete + create.
+      # Local Calendar's calendar.edit_event isn't reliable across
+      # versions, so we delete + recreate. Preserves the uid semantics
+      # (new uid after recreate) — acceptable since nobody stores uids.
       - service: calendar.delete_event
         target:
           entity_id: calendar.office
         data:
           event:
-            uid: "{{ state_attr('calendar.office', 'uid') }}"
+            uid: "{{ active.uid }}"
       - service: calendar.create_event
         target:
           entity_id: calendar.office
         data:
-          summary: "{{ summary }}"
-          start_date_time: "{{ orig_start }}"
+          summary: "{{ active.summary }}"
+          description: "{{ active.description | default('') }}"
+          start_date_time: "{{ active.start }}"
           end_date_time: "{{ new_end }}"
 
   book_office_custom:
@@ -364,39 +400,68 @@ script:
         then:
           - stop: "No active booking to extend"
             error: true
+      # Resolve the active event via calendar.get_events (uid isn't on
+      # state_attr for Local Calendar) so we can rewrite it.
+      - service: calendar.get_events
+        target:
+          entity_id: calendar.office
+        data:
+          start_date_time: "{{ (now() - timedelta(seconds=30)).isoformat() }}"
+          end_date_time: "{{ (now() + timedelta(seconds=30)).isoformat() }}"
+        response_variable: active_response
       - variables:
-          current_end: "{{ as_datetime(state_attr('calendar.office', 'end_time')) }}"
+          active_events: >-
+            {{ active_response['calendar.office']['events'] | default([]) }}
+          active: >-
+            {%- set ns = namespace(ev=None) -%}
+            {%- for e in active_events -%}
+              {%- if as_datetime(e.start) <= now()
+                     and as_datetime(e.end) > now()
+                     and ns.ev is none -%}
+                {%- set ns.ev = e -%}
+              {%- endif -%}
+            {%- endfor -%}
+            {{ ns.ev }}
+      - if:
+          - condition: template
+            value_template: "{{ active in ('None', None, '') }}"
+        then:
+          - stop: "Active event not found"
+            error: true
+      - variables:
+          current_end: "{{ as_datetime(active.end) }}"
           new_end: "{{ current_end + timedelta(minutes=(duration_minutes | int)) }}"
           check_start: "{{ current_end + timedelta(seconds=1) }}"
+      # Check for overlap between the extension window and any
+      # subsequent event.
       - service: calendar.get_events
         target:
           entity_id: calendar.office
         data:
           start_date_time: "{{ check_start }}"
           end_date_time: "{{ new_end }}"
-        response_variable: events_response
+        response_variable: overlap_response
       - if:
           - condition: template
             value_template: >-
-              {{ (events_response['calendar.office']['events'] | default([])) | length > 0 }}
+              {{ (overlap_response['calendar.office']['events']
+                  | default([])) | length > 0 }}
         then:
           - stop: "Conflict: subsequent booking would overlap"
             error: true
-      - variables:
-          summary: "{{ state_attr('calendar.office', 'message') }}"
-          orig_start: "{{ state_attr('calendar.office', 'start_time') }}"
       - service: calendar.delete_event
         target:
           entity_id: calendar.office
         data:
           event:
-            uid: "{{ state_attr('calendar.office', 'uid') }}"
+            uid: "{{ active.uid }}"
       - service: calendar.create_event
         target:
           entity_id: calendar.office
         data:
-          summary: "{{ summary }}"
-          start_date_time: "{{ orig_start }}"
+          summary: "{{ active.summary }}"
+          description: "{{ active.description | default('') }}"
+          start_date_time: "{{ active.start }}"
           end_date_time: "{{ new_end }}"
 
 # ──────────────────────────────────────────────────────────────────────
