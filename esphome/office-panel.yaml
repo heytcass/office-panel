@@ -1,4 +1,4 @@
-# office_panel — ESPHome firmware, Phase 1 (SPEC §12)
+# office-panel — ESPHome firmware, Phase 1 (SPEC §12)
 #
 # Hardware primitives come from the device library package:
 #   heytcass/esphome-device-library: devices/seeed/reterminal-e1002.yaml
@@ -58,7 +58,7 @@ wifi:
 
 # ──────────────────────────────────────────────────────────────────────
 # Subscriptions — office state comes from HA template sensors defined
-# in homeassistant/packages/office_panel.yaml.
+# in homeassistant/packages/office-panel.yaml.
 # ──────────────────────────────────────────────────────────────────────
 
 text_sensor:

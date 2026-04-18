@@ -1,4 +1,4 @@
-# office_panel — Home Assistant package
+# office-panel — Home Assistant package
 #
 # Loaded via `packages: !include_dir_named packages` in configuration.yaml.
 # Entity / script / automation naming follows CLAUDE.md:
@@ -10,7 +10,7 @@
 # Prerequisites (manual setup in HA UI before this package is useful):
 #   1. Settings → Devices & Services → Add Integration → Local Calendar
 #      Name: "Office". This creates calendar.office.
-#   2. Flash the panel firmware (esphome/office_panel.yaml). It publishes
+#   2. Flash the panel firmware (esphome/office-panel.yaml). It publishes
 #      sensor.office_panel_battery and sensor.office_panel_last_refresh
 #      which the notification automations below depend on.
 #

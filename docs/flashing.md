@@ -1,6 +1,6 @@
 # Flashing
 
-How to flash `esphome/office_panel.yaml` onto a reTerminal E1002.
+How to flash `esphome/office-panel.yaml` onto a reTerminal E1002.
 
 ## Prerequisites
 
@@ -16,11 +16,11 @@ How to flash `esphome/office_panel.yaml` onto a reTerminal E1002.
 ## Initial flash
 
 1. Clone this repo onto the machine running the HA ESPHome add-on, or
-   copy `esphome/office_panel.yaml` + `esphome/secrets.yaml` into the
+   copy `esphome/office-panel.yaml` + `esphome/secrets.yaml` into the
    add-on's config directory. (Tom's typical setup: the repo lives
    outside HA and is rsync'd in; pick whichever fits your workflow.)
 2. Open the HA ESPHome add-on UI. Click **New device** → point it at
-   `office_panel.yaml`, or hit **Adopt** if the device is broadcasting
+   `office-panel.yaml`, or hit **Adopt** if the device is broadcasting
    via Improv after a prior Seeed factory-firmware flash.
 3. Connect the E1002 via USB-C to the HA host.
 4. Click **Install → Plug into the computer running ESPHome Dashboard**.
@@ -60,7 +60,7 @@ all subsequent updates ship via the HA ESPHome add-on's OTA flow —
 ## Troubleshooting
 
 - **Panel stays on "Syncing..."**: HA isn't publishing `sensor.office_mode`.
-  Check `homeassistant/packages/office_panel.yaml` is loaded (reload HA
+  Check `homeassistant/packages/office-panel.yaml` is loaded (reload HA
   configuration or restart), and that `calendar.office` exists (Local
   Calendar integration → add integration named "Office").
 - **Compile fails on `Seeed-reTerminal-E1002` model**: you need ESPHome

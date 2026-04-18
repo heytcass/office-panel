@@ -1,4 +1,4 @@
-# office_panel — Lovelace dashboard
+# office-panel — Lovelace dashboard
 #
 # Register this file in Home Assistant's lovelace config so it shows up
 # as a secondary dashboard (main HA dashboard stays storage/UI-managed).

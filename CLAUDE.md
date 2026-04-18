@@ -1,6 +1,6 @@
 # CLAUDE.md — Operating Instructions for Claude Code
 
-This file tells Claude Code how to work on the `office_panel` project. Read this first before making any changes.
+This file tells Claude Code how to work on the `office-panel` project. Read this first before making any changes.
 
 ---
 
@@ -27,8 +27,8 @@ The user (Tom) runs:
 
 ## Build and deploy workflow
 
-- **Firmware lives in `esphome/office_panel.yaml`.** Tom flashes and updates via the HA ESPHome app UI. Do not assume a local `esphome` CLI is installed on the workstation unless asked.
-- **Home Assistant configuration lives in `homeassistant/packages/office_panel.yaml`.** This is a standard HA package include, loaded by adding `packages: !include_dir_named packages` to the user's HA `configuration.yaml` (if not already present).
+- **Firmware lives in `esphome/office-panel.yaml`.** Tom flashes and updates via the HA ESPHome app UI. Do not assume a local `esphome` CLI is installed on the workstation unless asked.
+- **Home Assistant configuration lives in `homeassistant/packages/office-panel.yaml`.** This is a standard HA package include, loaded by adding `packages: !include_dir_named packages` to the user's HA `configuration.yaml` (if not already present).
 - **Secrets are not in the repo.** `esphome/secrets.yaml.example` is a template. The real `secrets.yaml` is gitignored and lives on Tom's machine.
 - **Voice intents live in `homeassistant/intents/office_intents.yaml`**, loaded via the HA intent_script integration.
 
@@ -36,7 +36,7 @@ The user (Tom) runs:
 
 This project has a hard dependency on Tom's `esphome-device-library` (local path: `/home/tom/Projects/esphome-device-library`). The hardware-level E1002 package lives there; application logic lives here.
 
-**Preferred session setup.** Claude Code sessions should be launched from `/home/tom/Projects/` so both repos sit in a single context tree. Cross-repo imports and reasoning work naturally. Alternatively, `claude --add-dir /home/tom/Projects/esphome-device-library` from within `office_panel` achieves the same access.
+**Preferred session setup.** Claude Code sessions should be launched from `/home/tom/Projects/` so both repos sit in a single context tree. Cross-repo imports and reasoning work naturally. Alternatively, `claude --add-dir /home/tom/Projects/esphome-device-library` from within `office-panel` achieves the same access.
 
 **Audit before authoring.** Before writing any E1002 hardware package in the device library, you must:
 
@@ -71,7 +71,7 @@ Follow these exactly. The spec depends on them.
 - Panel entities are prefixed `office_panel_` (e.g., `sensor.office_panel_battery`)
 - Office state entities are prefixed `office_` (e.g., `sensor.office_mode`)
 - Scripts are prefixed `script.` with a verb-first name: `script.book_office`, `script.end_office_booking`
-- Automations use snake_case IDs matching their purpose: `office_panel_button_1_book_30`
+- Automations use snake_case IDs matching their purpose: `office_panel_button_left_book_30`
 - ESPHome events use dotted namespaces: `office_panel.button_pressed`, `office_panel.beep_conflict`
 
 If a name is not defined here or in `SPEC.md` §8, default to the closest existing pattern and ask if unsure.

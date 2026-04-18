@@ -28,8 +28,8 @@ Before the panel does anything useful, the HA side needs:
    ```
    Then symlink or copy the repo's package into HA's config dir:
    ```
-   ln -s <repo>/homeassistant/packages/office_panel.yaml \
-         <ha_config>/packages/office_panel.yaml
+   ln -s <repo>/homeassistant/packages/office-panel.yaml \
+         <ha_config>/packages/office-panel.yaml
    ```
 3. **Dashboard registration.** See the header of
    `homeassistant/dashboards/office.yaml` for the `lovelace:` config
@@ -42,10 +42,10 @@ Before the panel does anything useful, the HA side needs:
 
 ## Iteration loop
 
-- **Firmware change.** Edit `esphome/office_panel.yaml`. Flash via the
+- **Firmware change.** Edit `esphome/office-panel.yaml`. Flash via the
   HA ESPHome add-on (first time over USB, subsequent via OTA). Watch
   the device log in the add-on UI — there is no simulator.
-- **HA change.** Edit `homeassistant/packages/office_panel.yaml`.
+- **HA change.** Edit `homeassistant/packages/office-panel.yaml`.
   Reload the relevant integration via Developer Tools or restart HA.
   Use the Template editor to sanity-check template sensor states before
   checking behavior on the panel.
@@ -92,4 +92,4 @@ Manual scripts are available in Developer Tools → Services:
   weekend, 2 h overnight. "Up to" because the device wakes on its own
   schedule, not on HA state changes. If you need faster reflection for
   testing, temporarily shorten `sleep_duration` in
-  `esphome/office_panel.yaml`.
+  `esphome/office-panel.yaml`.

@@ -8,7 +8,7 @@
 
 ## 1. Project summary
 
-`office_panel` is a battery-powered, wall-mounted e-paper display that shows the real-time booking status of the home office (the primary Teams call location in Tom and Christen Cassady's home). It is mounted in the hallway adjacent to the office door, facing approaching foot traffic, and serves as a hard-signal indicator of whether the room is currently in use.
+`office-panel` is a battery-powered, wall-mounted e-paper display that shows the real-time booking status of the home office (the primary Teams call location in Tom and Christen Cassady's home). It is mounted in the hallway adjacent to the office door, facing approaching foot traffic, and serves as a hard-signal indicator of whether the room is currently in use.
 
 The system consists of three components:
 
@@ -69,11 +69,11 @@ The panel answers one question, visible from six feet away: **can I knock on thi
 
 ### Relationship to `esphome-device-library`
 
-This project is its own repository. However, the hardware-level E1002 configuration (pin definitions, display model declaration, sensor/button/buzzer component setup) should be authored as a reusable ESPHome package in `heytcass/esphome-device-library` (local path: `/home/tom/Projects/esphome-device-library`) under a device path such as `devices/seeed/reterminal_e1002/`. `office_panel` then imports that package via ESPHome's `packages:` include syntax.
+This project is its own repository. However, the hardware-level E1002 configuration (pin definitions, display model declaration, sensor/button/buzzer component setup) should be authored as a reusable ESPHome package in `heytcass/esphome-device-library` (local path: `/home/tom/Projects/esphome-device-library`) under a device path such as `devices/seeed/reterminal_e1002/`. `office-panel` then imports that package via ESPHome's `packages:` include syntax.
 
-Application-specific logic (display modes, calendar integration, button action handling, mode state machine, voice intent hooks) stays in `office_panel` and does not belong in the device library.
+Application-specific logic (display modes, calendar integration, button action handling, mode state machine, voice intent hooks) stays in `office-panel` and does not belong in the device library.
 
-**Working across both repos.** Claude Code sessions should be launched from `/home/tom/Projects/` (the parent directory) so both repos share a single context tree, or alternatively invoked with `--add-dir /home/tom/Projects/esphome-device-library` when scoped to `office_panel`.
+**Working across both repos.** Claude Code sessions should be launched from `/home/tom/Projects/` (the parent directory) so both repos share a single context tree, or alternatively invoked with `--add-dir /home/tom/Projects/esphome-device-library` when scoped to `office-panel`.
 
 **Audit existing work before authoring new abstractions.** Before writing any E1002 hardware package, the implementer must:
 
@@ -329,6 +329,8 @@ Response: `"Free after HH:MM"` or `"Open now"` if currently available.
 
 This section defines the full set of HA entities, helpers, scripts, and automations that the firmware and input surfaces depend on. These are the contract; the firmware should rely only on what is listed here.
 
+**Naming note.** The project / repo / directory is `office-panel` (hyphenated), but HA entity IDs, automation IDs, and ESPHome event names use `office_panel_*` / `office_panel.*` (underscored). Home Assistant requires entity IDs to be `[a-z0-9_]+`, which forbids hyphens. Keep this in mind when reading code: `office-panel.yaml` is a filename; `office_panel_battery` is an entity ID.
+
 ### Entities and helpers
 
 | Entity ID | Type | Purpose |
@@ -468,18 +470,18 @@ Rough estimate based on the above schedule and assuming ~10 display refreshes pe
 ## 11. Repository layout
 
 ```
-office_panel/
+office-panel/
 ├── README.md                    # Project overview, setup instructions
 ├── SPEC.md                      # This document
 ├── CLAUDE.md                    # Claude Code operating instructions
 ├── LICENSE
 ├── esphome/
-│   ├── office_panel.yaml        # Main firmware config
+│   ├── office-panel.yaml        # Main firmware config
 │   ├── secrets.yaml.example     # Template; real secrets gitignored
 │   └── fonts/                   # Font files used by display
 ├── homeassistant/
 │   ├── packages/
-│   │   └── office_panel.yaml    # HA package: helpers, sensors, scripts, automations
+│   │   └── office-panel.yaml    # HA package: helpers, sensors, scripts, automations
 │   ├── dashboards/
 │   │   └── office.yaml          # Lovelace view definition
 │   └── intents/

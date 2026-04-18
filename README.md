@@ -1,4 +1,4 @@
-# office_panel
+# office-panel
 
 Battery-powered, wall-mounted color e-paper panel that shows the live booking status of the home office. Mounted in the hallway outside the office door.
 
