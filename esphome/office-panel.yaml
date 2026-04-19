@@ -1,0 +1,364 @@
+# office-panel — ESPHome firmware, Phase 1 (SPEC §12)
+#
+# Hardware primitives come from the device library package:
+#   heytcass/esphome-device-library: devices/seeed/reterminal-e1002.yaml
+# This file owns application logic: mode subscription, display rendering,
+# wake cadence, no-op refresh optimization, HA-side publishing.
+#
+# Phase 1 scope:
+#   - Five modes (BOOKED / STARTING_SOON / AVAILABLE / WEEKEND / OVERNIGHT)
+#   - Wake cadence per SPEC §10 (adaptive)
+#   - Skip display refresh when nothing has changed since last render
+#   - Publish sensor.office_panel_battery and sensor.office_panel_last_refresh
+# Deferred to later phases:
+#   - Phase 2: button-press events, buzzer tones, CONFLICT mode, EXT1 wake
+#   - Phase 2: USB-C charging binary_sensor (GPIO to be probed)
+#   - Phase 4: font tuning, color palette calibration, wake-cadence tuning
+
+substitutions:
+  device_name: office-panel
+  friendly_name: "Office Panel"
+  # Display rotation forwarded to the device package (0 = default landscape).
+  display_rotation: "0"
+
+# Single user-owned device — keep entity IDs stable at the names SPEC §8
+# hardcodes (sensor.office_panel_battery, sensor.office_panel_last_refresh,
+# etc.). name_add_mac_suffix would turn those into MAC-suffixed names that
+# would break the notification automations.
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  name_add_mac_suffix: false
+  min_version: "2025.11.0"
+  on_boot:
+    # Priority -100 runs after all components are initialized; the device
+    # package uses priority 600 for battery-rail enable. Both entries
+    # coexist because ESPHome merges on_boot lists additively.
+    - priority: -100
+      then:
+        - script.execute: wake_and_render
+
+# Pull the hardware package and shared infra from the device library.
+# Same composition the library's own firmware/seeed-reterminal-e1002.yaml
+# uses, minus the factory-only bits (http-ota / improv / dashboard_import).
+packages:
+  device:
+    url: https://github.com/heytcass/esphome-device-library
+    ref: main
+    files:
+      - common/base.yaml
+      - common/esp32s3-psram-platform.yaml
+      - common/diagnostics.yaml
+      - devices/seeed/reterminal-e1002.yaml
+    refresh: 1d
+
+wifi:
+  ap:
+    ssid: "${device_name} Fallback"
+
+# ──────────────────────────────────────────────────────────────────────
+# Subscriptions — office state comes from HA template sensors defined
+# in homeassistant/packages/office-panel.yaml.
+# ──────────────────────────────────────────────────────────────────────
+
+text_sensor:
+  - platform: homeassistant
+    id: office_mode
+    entity_id: sensor.office_mode
+
+  - platform: homeassistant
+    id: office_current_owner
+    entity_id: sensor.office_current_booking_owner
+
+  - platform: homeassistant
+    id: office_current_end_hhmm
+    entity_id: sensor.office_current_end_hhmm
+
+  - platform: homeassistant
+    id: office_next_owner
+    entity_id: sensor.office_next_booking_owner
+
+  - platform: homeassistant
+    id: office_next_start_hhmm
+    entity_id: sensor.office_next_start_hhmm
+
+  - platform: homeassistant
+    id: office_next_within_60
+    entity_id: sensor.office_next_within_60_minutes
+
+  - platform: homeassistant
+    id: office_weekend_day_label
+    entity_id: sensor.office_weekend_day_label
+
+  # Published back to HA — last successful render timestamp.
+  - platform: template
+    id: last_refresh_sensor
+    name: "Last Refresh"
+    device_class: timestamp
+    update_interval: never
+
+sensor:
+  - platform: homeassistant
+    id: office_starting_soon_min
+    entity_id: sensor.office_starting_soon_minutes
+
+  # Rename the device-library battery_level sensor so it publishes as
+  # sensor.office_panel_battery per SPEC §8.
+  - id: !extend battery_level
+    name: "Battery"
+
+# ──────────────────────────────────────────────────────────────────────
+# No-op refresh globals — persist across deep sleep via NVS so that the
+# next wake can compare current state to last-rendered state and skip the
+# ~15-30s full refresh if nothing changed. This is SPEC §10's single most
+# important battery optimization.
+# ──────────────────────────────────────────────────────────────────────
+
+globals:
+  - id: last_rendered_mode
+    type: std::string
+    restore_value: true
+    initial_value: '""'
+
+  - id: last_rendered_owner
+    type: std::string
+    restore_value: true
+    initial_value: '""'
+
+  - id: last_rendered_end
+    type: std::string
+    restore_value: true
+    initial_value: '""'
+
+  - id: last_rendered_next_owner
+    type: std::string
+    restore_value: true
+    initial_value: '""'
+
+  - id: last_rendered_next_start
+    type: std::string
+    restore_value: true
+    initial_value: '""'
+
+# ──────────────────────────────────────────────────────────────────────
+# Display — palette, fonts, render lambda
+# ──────────────────────────────────────────────────────────────────────
+
+# Spectra 6 native palette. The driver quantizes any value to the
+# nearest of these six pigments, but using exact pigment values here
+# avoids surprise dithering.
+color:
+  - id: color_black
+    red: 0%
+    green: 0%
+    blue: 0%
+  - id: color_white
+    red: 100%
+    green: 100%
+    blue: 100%
+  - id: color_red
+    red: 100%
+    green: 0%
+    blue: 0%
+  - id: color_green
+    red: 0%
+    green: 100%
+    blue: 0%
+  - id: color_yellow
+    red: 100%
+    green: 100%
+    blue: 0%
+
+# Inter pulled from Google Fonts at compile time. Phase 4 will likely
+# swap to a bundled permissive font in esphome/fonts/ once we have a
+# final legibility read on the physical panel.
+font:
+  - file: "gfonts://Inter:wght@800"
+    id: font_huge
+    size: 140
+    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:,.-—!? "
+
+  - file: "gfonts://Inter:wght@700"
+    id: font_large
+    size: 72
+    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:,.-—!? "
+
+  - file: "gfonts://Inter:wght@600"
+    id: font_medium
+    size: 40
+    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:,.-—!? "
+
+  - file: "gfonts://Inter:wght@500"
+    id: font_small
+    size: 24
+    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:,.-—!? "
+
+# Lambda renders the current mode. Layout coordinates are approximate —
+# 800x480 display; Phase 4 will tune alignment after physical review.
+display:
+  - id: !extend epaper_display
+    lambda: |-
+      const auto& mode = id(office_mode).state;
+      const int cx = 400;  // 800 / 2
+
+      if (mode == "BOOKED") {
+        it.fill(id(color_red));
+        it.print(cx, 60, id(font_huge), id(color_white),
+                 TextAlign::TOP_CENTER, "IN USE");
+        if (!id(office_current_owner).state.empty() &&
+            id(office_current_owner).state != "unknown") {
+          it.print(cx, 240, id(font_large), id(color_white),
+                   TextAlign::TOP_CENTER,
+                   id(office_current_owner).state.c_str());
+        }
+        if (!id(office_current_end_hhmm).state.empty() &&
+            id(office_current_end_hhmm).state != "unknown") {
+          std::string until = "Until " + id(office_current_end_hhmm).state;
+          it.print(cx, 360, id(font_medium), id(color_white),
+                   TextAlign::TOP_CENTER, until.c_str());
+        }
+      }
+      else if (mode == "STARTING_SOON") {
+        it.fill(id(color_yellow));
+        std::string primary = id(office_next_owner).state +
+                              " " + id(office_next_start_hhmm).state;
+        it.print(cx, 80, id(font_large), id(color_black),
+                 TextAlign::TOP_CENTER, primary.c_str());
+        int mins = (int) id(office_starting_soon_min).state;
+        char subtitle[48];
+        snprintf(subtitle, sizeof(subtitle),
+                 "Starting in %d minute%s", mins, (mins == 1 ? "" : "s"));
+        it.print(cx, 280, id(font_medium), id(color_black),
+                 TextAlign::TOP_CENTER, subtitle);
+      }
+      else if (mode == "AVAILABLE") {
+        it.fill(id(color_green));
+        it.print(cx, 60, id(font_huge), id(color_white),
+                 TextAlign::TOP_CENTER, "OPEN");
+        if (id(office_next_within_60).state == "true") {
+          std::string next = "Next: " +
+                             id(office_next_start_hhmm).state +
+                             " — " + id(office_next_owner).state;
+          it.print(cx, 280, id(font_medium), id(color_white),
+                   TextAlign::TOP_CENTER, next.c_str());
+        }
+      }
+      else if (mode == "WEEKEND") {
+        it.fill(id(color_green));
+        it.print(cx, 60, id(font_huge), id(color_white),
+                 TextAlign::TOP_CENTER, "OPEN");
+        if (!id(office_weekend_day_label).state.empty()) {
+          it.print(cx, 280, id(font_medium), id(color_white),
+                   TextAlign::TOP_CENTER,
+                   id(office_weekend_day_label).state.c_str());
+        }
+      }
+      else if (mode == "OVERNIGHT") {
+        it.fill(id(color_white));
+        auto now = id(homeassistant_time).now();
+        if (now.is_valid()) {
+          char time_str[8];
+          snprintf(time_str, sizeof(time_str), "%02d:%02d",
+                   now.hour, now.minute);
+          it.print(cx, 200, id(font_large), id(color_black),
+                   TextAlign::TOP_CENTER, time_str);
+        }
+      }
+      else {
+        // Unknown / unavailable mode — render a neutral "syncing" screen
+        // rather than a blank white one, so field debugging is obvious.
+        it.fill(id(color_white));
+        it.print(cx, 220, id(font_medium), id(color_black),
+                 TextAlign::TOP_CENTER, "Syncing...");
+      }
+
+# ──────────────────────────────────────────────────────────────────────
+# Wake flow — connect, decide, render (or skip), sleep
+# ──────────────────────────────────────────────────────────────────────
+
+script:
+  - id: wake_and_render
+    mode: single
+    then:
+      # Wait for the API and a real mode value before deciding anything.
+      # 30 s timeout is generous; if HA is unreachable we still sleep and
+      # try again next cycle rather than burning battery spinning.
+      - wait_until:
+          condition:
+            and:
+              - api.connected
+              - lambda: |-
+                  return id(office_mode).has_state() &&
+                         !id(office_mode).state.empty() &&
+                         id(office_mode).state != "unknown" &&
+                         id(office_mode).state != "unavailable";
+          timeout: 30s
+
+      - if:
+          condition:
+            lambda: |-
+              return id(office_mode).state != id(last_rendered_mode) ||
+                     id(office_current_owner).state != id(last_rendered_owner) ||
+                     id(office_current_end_hhmm).state != id(last_rendered_end) ||
+                     id(office_next_owner).state != id(last_rendered_next_owner) ||
+                     id(office_next_start_hhmm).state != id(last_rendered_next_start);
+          then:
+            - logger.log:
+                format: "State changed (mode=%s) — rendering"
+                args: ['id(office_mode).state.c_str()']
+            - lambda: |-
+                id(last_rendered_mode) = id(office_mode).state;
+                id(last_rendered_owner) = id(office_current_owner).state;
+                id(last_rendered_end) = id(office_current_end_hhmm).state;
+                id(last_rendered_next_owner) = id(office_next_owner).state;
+                id(last_rendered_next_start) = id(office_next_start_hhmm).state;
+            - component.update: epaper_display
+            # Per HA community thread 970545 — Spectra 6 panels need the
+            # full 15-30s refresh to finish before any state transition,
+            # or the display can be left in an inconsistent partial state.
+            - delay: 45s
+          else:
+            - logger.log: "State unchanged — skipping display refresh"
+
+      # Record last-refresh timestamp regardless of whether we rendered;
+      # the panel "checked in" even if nothing changed on the display.
+      - lambda: |-
+          auto now = id(homeassistant_time).now();
+          if (now.is_valid()) {
+            char buf[32];
+            now.strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S");
+            id(last_refresh_sensor).publish_state(buf);
+          }
+
+      # Schedule next wake per SPEC §10:
+      #   weekday 07-22: 15 min
+      #   weekend 07-22: 60 min
+      #   overnight   : 2 h
+      - lambda: |-
+          uint32_t sleep_s = 900;  // safe fallback: 15 min
+          auto now = id(homeassistant_time).now();
+          if (now.is_valid()) {
+            int hour = now.hour;
+            int dow = now.day_of_week;  // 1=Sun..7=Sat
+            bool is_weekend = (dow == 1 || dow == 7);
+            bool is_overnight = (hour >= 22 || hour < 7);
+            if (is_overnight)      sleep_s = 7200;
+            else if (is_weekend)   sleep_s = 3600;
+            else                   sleep_s = 900;
+          }
+          id(deep_sleep_1).set_sleep_duration(sleep_s * 1000);
+
+      - deep_sleep.enter:
+          id: deep_sleep_1
+
+# ──────────────────────────────────────────────────────────────────────
+# Deep sleep — default 15 min; overridden by the wake script before enter.
+# run_duration is the wall-clock ceiling per wake cycle (safety net in
+# case api.connected never resolves and we'd otherwise sit awake burning
+# battery).
+# ──────────────────────────────────────────────────────────────────────
+
+deep_sleep:
+  id: deep_sleep_1
+  run_duration: 60s
+  sleep_duration: 15min

@@ -1,0 +1,32 @@
+# ESPHome
+esphome/secrets.yaml
+esphome/.esphome/
+*.bin
+.pioenvs/
+.piolibdeps/
+
+# Home Assistant
+homeassistant/secrets.yaml
+homeassistant/**/.storage/
+
+# IDE / tooling
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.claude/settings.local.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Build artifacts
+build/
+*.pyc
+__pycache__/
+venv/
+.direnv/
