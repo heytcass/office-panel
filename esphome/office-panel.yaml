@@ -173,22 +173,22 @@ color:
 # swap to a bundled permissive font in esphome/fonts/ once we have a
 # final legibility read on the physical panel.
 font:
-  - file: "gfonts://Inter:wght@800"
+  - file: "gfonts://Inter@800"
     id: font_huge
     size: 140
     glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:,.-—!? "
 
-  - file: "gfonts://Inter:wght@700"
+  - file: "gfonts://Inter@700"
     id: font_large
     size: 72
     glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:,.-—!? "
 
-  - file: "gfonts://Inter:wght@600"
+  - file: "gfonts://Inter@600"
     id: font_medium
     size: 40
     glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:,.-—!? "
 
-  - file: "gfonts://Inter:wght@500"
+  - file: "gfonts://Inter@500"
     id: font_small
     size: 24
     glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:,.-—!? "
